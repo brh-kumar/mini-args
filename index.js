@@ -1,69 +1,35 @@
-var exports = module.exports = {};
-var definedOptions = [{
-  name: 'file',
-  alias: 'f',
-  mandatory: true,
-  type: 'string'
-}, {
-  name: 'hasHeaders',
-  alias: 'hh',
-  default: true,
-  type: 'boolean'
-}, {
-  name: 'headers',
-  alias: 'h',
-  type: 'array'
-}, {
-  name: 'port',
-  alias: 'p',
-  default: 3000,
-  type: 'number'
-}, {
-  name: 'user',
-  alias: 'u',
-  type: 'object'
-}, {
-  name: 'skipHeaders',
-  alias: 'sh',
-  caseSensitive: true,
-  allowed: ['Y', 'N', 1, 0],
-  default: true,
-  type: 'string|boolean|number'
-}, {
-  name: 'save',
-  type: 'single'
-}];
-
-const args = process.argv.slice(2);
 const invalid = 'invalid!';
+const notAllowed = 'notAllowed!';
 
-console.log(args);
+var args;
+var definedOptions;
 
-var getDefinedOptions = function () {
-  // Holds current argument
-  //
-  var arg;
+var isEmpty = function (obj) {
+  if (obj == null) return true;
+  if (obj.length > 0) return false;
+  if (obj.length === 0) return true;
+  if (typeof obj !== 'object') return true;
+  for (let key in obj) {
+    if (hasOwnProperty.call(obj, key)) return false;
+  }
+  return true;
+};
 
+var getArgvByDefinedOptions = function () {
   var invalidOptions = false;
-  var optionIndex;
   var option;
+  var temp = {};
   var result = {};
 
-  // To quickly get index of specific option by name
-  // stores { optionsName: index }
-  //        { alias: index }
+  // To quickly get specific argument object by name
+  // mapped as { argument: value }
   //
-  var minifiedOptions = {};
-
-  // Holds mandatory options names
-  // used to show errors if mandatory options not found or invalid
-  // will be spliced if mandatory option found valid
-  //
-  var mandatoryOptions = [];
+  var minifiedArgs = {};
 
   // To parse passed arguments by defined options type
   // val - options value (passed argument)
-  // if invalid value found will return invalid. ref. const invalid;
+  // if valid then returns parsed value
+  // else returns invalid. ref. const invalid;
   // TODO for minified version
   // most of the line can written in sigle line or simplified
   // eg. 'array' can be
@@ -99,7 +65,7 @@ var getDefinedOptions = function () {
 
       val = parseFloat(val);
       if (option.allowed && option.allowed.length && option.allowed.indexOf(val) === -1) {
-        return invalid;
+        return notAllowed;
       }
 
       return val;
@@ -115,7 +81,7 @@ var getDefinedOptions = function () {
 
       val = val.toString();
       if (allowed && allowed.indexOf((caseSensitive && val) || val.toLowerCase()) === -1) {
-        return invalid;
+        return notAllowed;
       }
 
       return val;
@@ -123,22 +89,25 @@ var getDefinedOptions = function () {
 
     'boolean|number': function (val) {
       let res = this.boolean(val);
-      return (res !== invalid && res) || this.number(val);
+      return (res !== invalid) ? res : this.number(val);
     },
 
     'boolean|string': function (val) {
       let res = this.boolean(val);
-      return (res !== invalid && res) || this.string(val);
+      return (res !== invalid) ? res : this.string(val);
     },
 
     'number|string': function (val) {
       let res = this.number(val);
-      return (res !== invalid && res) || this.string(val);
+      return (res !== invalid) ? res : this.string(val);
     },
 
     'boolean|number|string': function (val) {
       let res = this.boolean(val);
-      return (res !== invalid && res) || ((res = this.number()) !== invalid && res) || this.string(val);
+      if (res !== invalid) return res;
+
+      res = this.number();
+      return (res !== invalid) ? res : this.string(val);
     },
 
     'JSONParse': function (val) {
@@ -154,64 +123,66 @@ var getDefinedOptions = function () {
   // -mandatory options
   // -minified options
   //
-  for (let i = 0, n = definedOptions.length; i < n; i++) {
-    if (definedOptions[i].mandatory) mandatoryOptions.push(definedOptions[i].name);
-
-    minifiedOptions['--' + definedOptions[i].name] = i;
-    if (definedOptions[i].alias) minifiedOptions['-' + definedOptions[i].alias] = i;
+  for (let i = 0, n = args.length; i < n; i++) {
+    if (/^(--|-)/.test(args[i])) minifiedArgs[args[i]] = (!/^(--|-)/.test(args[i + 1])) && args[i + 1] || '';
+    if (!/^(--|-)/.test(args[i + 1])) i++;
   }
 
-  // Loop args
+  // Loop defined options
   //
-  for (let i = 0, n = args.length; i < n; i++) {
-    arg = args[i];
-    optionIndex = minifiedOptions[arg];
+  for (let i = 0, n = definedOptions.length; i < n; i++) {
+    option = definedOptions[i];
+    temp['name'] = '--' + option.name;
+    temp['alias'] = '-' + option.alias;
+    option['type'] = option.type.toLowerCase().split('|').sort().join('|');
+    option['value'] = (minifiedArgs.hasOwnProperty(temp.name) &&  minifiedArgs[temp.name]) || (minifiedArgs.hasOwnProperty(temp.alias) && minifiedArgs[temp.alias]) || invalid;
 
-    // For now, if argument not found in definedOptions then skip it
-    // can be modified to throw an error if neccessary
-    //
-    if (optionIndex === undefined) continue;
+    if (option.value === invalid && option.type !== 'single') {
 
-    option = definedOptions[optionIndex];
-    option['value'] = args[i + 1] || '';
+      // If a option is mandatory and value is not passed then thorw an error and continue
+      // 'single' typed option cannot be mandatory
+      //
+      if (option.mandatory) {
+        console.log(`Error: No value found for "${option.name}"`);
+        invalidOptions = true;
+        continue;
+      }
 
-    if (/^(--|-)/.test(option.value) && option.type !== 'single') {
-      console.log(`Error: No value found for "${arg}"`);
+      // If option value is not found in args then check for default value
+      //
+      if (!option.hasOwnProperty('default')) continue;
+
+      // default value cannot be of different type must match option's type
+      //
+      option['value'] = option.default;
+    }
+
+    option['parsedValue'] = getValueByType[option.type](option.value);
+
+    if (option.parsedValue === invalid) {
+      console.log(`Error: "${option.value}" found!, expected ${option.type} for "${temp.name}(${temp.alias})"`);
       invalidOptions = true;
-    } else {
-      option['value'] = getValueByType[option.type](option.value);
     }
 
-    // Note*
-    // do not decide here that it's invalid if args[i + 1] is empty|undefined
-    // if do then skip type "single"
-    // type "single" - if it's mentioned in command line then considered tobe true (eg. --save --delete)
-    //
-    if (option.value === invalid) {
-      console.log(`Error: ${args[i + 1]} found!, expected "${option.type}" for "${arg}"`);
+    if (option.parsedValue === notAllowed) {
+      console.log(`Error: "${option.value}" not allowed in "${temp.name}(${temp.alias})"`);
       invalidOptions = true;
     }
 
-    if (!invalidOptions && option.mandatory) {
-      mandatoryOptions.splice(optionIndex, 1);
-    }
-
-    result[option.name] = option.value;
-
-    if (option.type !== 'single') i++;
+    result[option.name] = option.parsedValue;
   }
 
   if (invalidOptions) process.exit();
 
-  console.log(result);
+  return result;
 };
 
-getOptions = function (args = process.argv.slice(2)) {
-  let options = {};
-  let arg;
-  let value;
-  let i;
-  let n = args.length;
+var getArgv = function () {
+  var options = {};
+  var arg;
+  var value;
+  var i;
+  var n = args.length;
 
   function isOptionName (index = i) {
     let nextArg = args[index];
@@ -238,11 +209,30 @@ getOptions = function (args = process.argv.slice(2)) {
     arg = args[i].replace(/--|-/, '');
     if (isOptionName()) {
       options[arg] = getOptionValue();
-      i++;
+
+      // Checking whether next a[i+1] is a option or value
+      // if value then skip it by i++
+      // else let is continue
+      //
+      if (!isOptionName(i+1)) i++;
     }
   }
 
   return options;
 };
-// console.log(getOptions());
-getDefinedOptions();
+
+module.exports = function (definedOpts, argv) {
+  args = (!isEmpty(argv)) ? argv : process.argv.slice(2);
+  definedOptions = (!isEmpty(definedOpts)) ? definedOpts : [];
+
+  if (isEmpty(args)) {
+    console.log('Error: No arguments found!');
+    process.exit();
+  }
+
+  if (isEmpty(definedOptions)) {
+    return getArgv();
+  }
+
+  return getArgvByDefinedOptions();
+};
